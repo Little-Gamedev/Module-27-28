@@ -1,21 +1,16 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class TimerHeartsView : MonoBehaviour
+public class TimerHeartsView : TimerView
 {
     [SerializeField] private GameObject _heartPrefab;
-    [SerializeField] private TimerHolder _timerHolder;
     [SerializeField] private Transform _parentTransform;
 
     private List<GameObject> _hearts = new List<GameObject>();
 
-    private void Start() => _timerHolder.ChangedState += UpdateHearts;
-
-    private void OnDestroy() => _timerHolder.ChangedState -= UpdateHearts;
-
-    private void UpdateHearts(bool active, float time)
+    protected override void Show(float value)
     {
-        int currentWholeSeconds = (int)time;
+        int currentWholeSeconds = (int)value;
 
         if (currentWholeSeconds < _hearts.Count)
         {

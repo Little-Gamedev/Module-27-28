@@ -2,12 +2,10 @@ using UnityEngine;
 
 public class Enemy : MonoBehaviour
 {
-    [SerializeField] private Renderer _renderer;
+    private EnemySettings _enemySettings;
 
-    public bool IsDead { get; private set; }
+    public float Damage => _enemySettings.Damage;
+    public virtual string GetDescription() => $"Урон: {Damage}";
 
-    public void SetColor(Color color) => _renderer.material.color = color;
-
-    public void Die() => IsDead = true;
-
+    public virtual void Initialize(EnemySettings settings) => _enemySettings = settings;
 }

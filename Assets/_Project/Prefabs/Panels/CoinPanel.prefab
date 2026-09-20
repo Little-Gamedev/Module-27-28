@@ -224,7 +224,7 @@ GameObject:
   - component: {fileID: 5300685474563719142}
   - component: {fileID: 1215593635931746159}
   - component: {fileID: 2008041014052334715}
-  - component: {fileID: 4889398469009608456}
+  - component: {fileID: 7375514019745769778}
   m_Layer: 5
   m_Name: CoinPanel
   m_TagString: Untagged
@@ -317,7 +317,7 @@ MonoBehaviour:
   m_ChildScaleWidth: 0
   m_ChildScaleHeight: 0
   m_ReverseArrangement: 0
---- !u!114 &4889398469009608456
+--- !u!114 &7375514019745769778
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -326,8 +326,8 @@ MonoBehaviour:
   m_GameObject: {fileID: 4489807219145369924}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 07580d48fd78bf543af3cc3045698c0e, type: 3}
+  m_Script: {fileID: 11500000, guid: 401d5b6c237da4b49ba58728fd45f733, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CurrencyPanel
-  _currencyIcon: {fileID: 6549857877478765689}
   _countTMP: {fileID: 8058046555562183679}
+  _currencyType: 0

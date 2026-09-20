@@ -2,51 +2,61 @@ using System;
 
 public class Timer
 {
-    public event Action<bool, float> ChangedState;
+    public event Action Finished;
 
-    public float CurrentTime => _time;
-    public float CurrentProgress => _time / _delay;
+    private readonly ReactiveVariable<float> _time;
+
+    private readonly ReactiveVariable<bool> _isRunning;
+    private readonly ReactiveVariable<float> _progress;
+    private readonly float _delay;
+
+    public IReadOnlyVariable<float> CurrentTime => _time;
+    public IReadOnlyVariable<bool> IsRunning => _isRunning;
+
+    public IReadOnlyVariable<float> CurrentProgress => _progress;
     public float CurrentDelay => _delay;
-
-    private float _time = 0;
-    private float _delay;
-
-    private bool _isStart;
 
     public Timer(float delay)
     {
-        _delay = delay;
+        _time = new ReactiveVariable<float>();
+        _progress = new ReactiveVariable<float>();
+        _isRunning = new ReactiveVariable<bool>();
+
+        if (delay <= 0)
+        {
+            UnityEngine.Debug.LogError("[Timer] Максимальное время таймера не может быть 0 или отрицательным. Выставлено значение = 1");
+            _delay = 1;
+        }
+        else
+        {
+            _delay = delay;
+        }
     }
 
-    public void Resume()
-    {
-        _isStart = true;
-        ChangedState?.Invoke(_isStart, _time);
-    }
-
-    public void Pause()
-    {
-        _isStart = false;
-        ChangedState?.Invoke(_isStart, _time);
-    }
+    public void Resume() => _isRunning.Value = true;
+    public void Pause() => _isRunning.Value = false;
 
     public void Reseter()
     {
-        _isStart = false;
-        _time = 0;
-        ChangedState?.Invoke(_isStart, _time);
+        _isRunning.Value = false;
+        _time.Value = 0;
+        UpdateProgress();
     }
 
     public void Update(float deltaTime)
     {
-        if (_isStart == false)
+        if (_isRunning.Value == false)
             return;
 
-        _time += deltaTime;
+        _time.Value += deltaTime;
+        UpdateProgress();
 
-        ChangedState?.Invoke(_isStart, _time);
-
-        if (_time >= _delay)
+        if (_time.Value >= _delay)
+        {
+            Finished?.Invoke();
             Reseter();
+        }
     }
+
+    private void UpdateProgress() => _progress.Value = _time.Value / _delay;
 }

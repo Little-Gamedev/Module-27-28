@@ -1,21 +1,26 @@
-using TMPro;
 using UnityEngine;
 
-public class TimerView : MonoBehaviour
+public abstract class TimerView : MonoBehaviour
 {
-    [SerializeField] private TMP_Text _countTimerTMP;
-    [SerializeField] private TimerHolder _timerHolder;
+    private IReadOnlyVariable<float> _time;
 
-    private void Start()
+    public void Initialize(IReadOnlyVariable<float> time)
     {
-        _timerHolder.ChangedState += UpdateCount;
-        _countTimerTMP.text = ((int)_timerHolder.CurrentTime).ToString();
+        _time = time;
+        _time.Changed += OnTimeChanged;
+
+        Show(_time.Value);
     }
 
     private void OnDestroy()
     {
-        _timerHolder.ChangedState -= UpdateCount;
+        if (_time == null)
+            return;
+
+        _time.Changed -= OnTimeChanged;
     }
 
-    private void UpdateCount(bool active, float time) => _countTimerTMP.text = ((int)time).ToString();
+    private void OnTimeChanged(float oldValue, float newValue) => Show(newValue);
+
+    protected abstract void Show(float value);
 }
