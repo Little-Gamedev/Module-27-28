@@ -7,25 +7,36 @@ public class EnemySpawner : MonoBehaviour
     [SerializeField] private Dragon _dragonPrefab;
     [SerializeField] private Transform _parentTransformForEnemy;
 
+    private readonly Quaternion _spawnRotation = Quaternion.Euler(0f, 180f, 0f);
+
     public Enemy Spawn(EnemySettings settings, Vector3 position)
     {
-        Enemy prefab = null;
-
-        if (settings is OrkSettings)
-            prefab = _orkPrefab;
-        else if (settings is ElfSettings)
-            prefab = _elfPrefab;
-        else if (settings is DragonSettings)
-            prefab = _dragonPrefab;
-        else
+        if (settings is OrkSettings orkSettings)
         {
-            Debug.LogWarning("[EnemySpawner] Такого врага не существует");
-            return null;
+            Ork ork = Instantiate(_orkPrefab, position, _spawnRotation, _parentTransformForEnemy);
+            ork.Initialize(orkSettings);
+
+            return ork;
         }
 
-        Enemy newEnemy = Instantiate(prefab, position, Quaternion.Euler(0f, 180f, 0f), _parentTransformForEnemy);
-        newEnemy.Initialize(settings);
+        if (settings is ElfSettings elfSettings)
+        {
+            Elf elf = Instantiate(_elfPrefab, position, _spawnRotation, _parentTransformForEnemy);
+            elf.Initialize(elfSettings);
 
-        return newEnemy;
+            return elf;
+        }
+
+        if (settings is DragonSettings dragonSettings)
+        {
+            Dragon dragon = Instantiate(_dragonPrefab, position, _spawnRotation, _parentTransformForEnemy);
+            dragon.Initialize(dragonSettings);
+
+            return dragon;
+        }
+
+        Debug.LogWarning("[EnemySpawner] Такого врага не существует. Вот такая вот хуйня собачка...");
+
+        return null;
     }
 }

@@ -1,17 +1,14 @@
-using UnityEngine;
-
 public class Dragon : Enemy
 {
     private float _accumulationFire;
 
     public float AccumulationFire => _accumulationFire;
+
     public override string GetDescription() => $"{base.GetDescription()}\nОгонь: {AccumulationFire}";
 
-    public override void Initialize(EnemySettings settings)
+    public void Initialize(DragonSettings settings)
     {
-        base.Initialize(settings);
-
-        if (settings is DragonSettings dragonSettings)
-            _accumulationFire = dragonSettings.AccumulationFire;
+        ApplySettings(settings);
+        _accumulationFire = settings.AccumulationFire;
     }
 }

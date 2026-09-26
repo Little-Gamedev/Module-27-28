@@ -1,0 +1,2718 @@
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Audio\AudioSettings.cs =====
+using UnityEngine;
+using UnityEngine.Audio;
+
+public class AudioSettings : MonoBehaviour
+{
+    private const float EnabledVolume = 0f;
+    private const float DisabledVolume = -80f;
+
+    [SerializeField] private AudioMixer _audioMixer;
+
+    private bool _isMusicEnabled = true;
+    private bool _isSfxEnabled = true;
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Alpha1))
+            ToggleMusic();
+
+        if (Input.GetKeyDown(KeyCode.Alpha2))
+            ToggleSfx();
+    }
+
+    public void ToggleMusic()
+    {
+        _isMusicEnabled = !_isMusicEnabled;
+
+        if (_isMusicEnabled)
+            _audioMixer.SetFloat("MusicVolume", EnabledVolume);
+        else
+            _audioMixer.SetFloat("MusicVolume", DisabledVolume);
+    }
+
+    public void ToggleSfx()
+    {
+        _isSfxEnabled = !_isSfxEnabled;
+
+        if (_isSfxEnabled)
+            _audioMixer.SetFloat("SFXVolume", EnabledVolume);
+        else
+            _audioMixer.SetFloat("SFXVolume", DisabledVolume);
+    }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Character\Character.cs =====
+using UnityEngine;
+using UnityEngine.AI;
+
+public class Character :
+    MonoBehaviour,
+    IDamageable,
+    IHealable,
+    IDirectionalMovable,
+    IDirectionalRotatable,
+    INavMeshMovable,
+    INavMeshLinkTraversable,
+    IMovementTarget
+{
+    [SerializeField] private float _moveSpeed = 10f;
+    [SerializeField] private float _rotationSpeed = 1000f;
+
+    [SerializeField] private int _maxHealth = 100;
+    [SerializeField] private float _woundedPercent = 0.3f;
+
+    [SerializeField] private float _jumpSpeed = 5f;
+    [SerializeField] private AnimationCurve _jumpCurve;
+
+    [SerializeField] private float _climbSpeed = 2f;
+
+    private DirectionalMover _directionalMover;
+    private AgentMover _agentMover;
+
+    private AgentJumper _jumper;
+    private AgentClimber _climber;
+    private AgentLinkTraverser _linkTraverser;
+
+    private DirectionalRotator _rotator;
+    private Health _health;
+
+    private NavMeshAgent _agent;
+
+    private Vector3 _targetPoint;
+
+    private bool _hasTarget;
+    private bool _isDamage;
+
+    public Vector3 CurrentVelocity
+    {
+        get
+        {
+            if (_agentMover != null)
+                return _agentMover.CurrentVelocity;
+
+            if (_directionalMover != null)
+                return _directionalMover.CurrentVelocity;
+
+            return Vector3.zero;
+        }
+    }
+
+    public Quaternion CurrentRotation
+    {
+        get
+        {
+            if (_rotator != null)
+                return _rotator.CurrentRotation;
+
+            return transform.rotation;
+        }
+    }
+
+    public Vector3 Position => transform.position;
+
+    public Vector3 TargetPoint => _targetPoint;
+
+    public bool HasTarget => _hasTarget;
+
+    public bool IsDead => _health.IsDead;
+
+    public bool IsWounded => _health.IsWounded;
+
+    public bool IsDamage => _isDamage;
+
+    public int CurrentHealth => _health.CurrentHealth;
+
+    public bool IsLinkTraversalInProcess => _linkTraverser != null && _linkTraverser.InProcess;
+
+    public NavMeshLinkTraversalType CurrentLinkTraversalType
+    {
+        get
+        {
+            if (_linkTraverser == null)
+                return NavMeshLinkTraversalType.None;
+
+            return _linkTraverser.CurrentTraversalType;
+        }
+    }
+
+    private void Awake()
+    {
+        InitializeHealth();
+    }
+
+    private void Update()
+    {
+        if (_health.IsDead)
+            return;
+
+        if (_directionalMover != null)
+            _directionalMover.Update(Time.deltaTime);
+
+        if (_agentMover != null && IsLinkTraversalInProcess == false)
+        {
+            _rotator.SetInputDirection(_agentMover.CurrentVelocity);
+        }
+
+        if (_rotator != null)
+            _rotator.Update(Time.deltaTime);
+    }
+
+    private void InitializeHealth()
+    {
+        _health = new Health(_maxHealth, _woundedPercent);
+    }
+
+    public void InitializeDirectionalMovement()
+    {
+        _agent = null;
+        _agentMover = null;
+
+        _jumper = null;
+        _climber = null;
+        _linkTraverser = null;
+
+        if (TryGetComponent(out CharacterController characterController))
+        {
+            _directionalMover = new CharacterControllerDirectionalMover(
+                    characterController,
+                    _moveSpeed);
+
+            _rotator = new TransformDirectionalRotator(
+                    transform,
+                    _rotationSpeed);
+
+            return;
+        }
+
+        if (TryGetComponent(out Rigidbody rigidbody))
+        {
+            _directionalMover = new RigidbodyDirectionalMover(rigidbody, _moveSpeed);
+
+            _rotator = new RigidbodyDirectionalRotator(rigidbody, _rotationSpeed);
+
+            return;
+        }
+
+        Debug.LogError("Не найден CharacterController или Rigidbody");
+    }
+
+    public void InitializeAgentMovement()
+    {
+        _directionalMover = null;
+
+        if (TryGetComponent(out NavMeshAgent agent) == false)
+        {
+            Debug.LogError("Не найден NavMeshAgent");
+            return;
+        }
+
+        _agent = agent;
+
+        _agent.updateRotation = false;
+        _agent.autoTraverseOffMeshLink = false;
+
+        _agentMover = new AgentMover(_agent, _moveSpeed);
+
+        _rotator = new TransformDirectionalRotator(transform, _rotationSpeed);
+
+        _jumper = new AgentJumper(_agent, this, _jumpSpeed, _jumpCurve);
+
+        _climber = new AgentClimber(_agent, this, _climbSpeed);
+
+        _linkTraverser = new AgentLinkTraverser(_jumper, _climber, _rotator);
+    }
+
+    public void SetMoveDirection(Vector3 direction)
+    {
+        if (_health.IsDead)
+            return;
+
+        if (_directionalMover == null)
+            return;
+
+        _directionalMover.SetInputDirection(direction);
+    }
+
+    public void SetRotationDirection(Vector3 direction)
+    {
+        if (_health.IsDead)
+            return;
+
+        if (_rotator == null)
+            return;
+
+        _rotator.SetInputDirection(direction);
+    }
+
+    public void SetDestination(Vector3 position)
+    {
+        if (_health.IsDead)
+            return;
+
+        if (_agentMover == null)
+            return;
+
+        _agentMover.SetDestination(position);
+    }
+
+    public void StopMove()
+    {
+        if (_agentMover == null)
+            return;
+
+        _agentMover.Stop();
+    }
+
+    public void ResumeMove()
+    {
+        if (_health.IsDead)
+            return;
+
+        if (_agentMover == null)
+            return;
+
+        _agentMover.Resume();
+    }
+
+    public void ResetPath()
+    {
+        if (_agentMover == null)
+            return;
+
+        _agentMover.ResetPath();
+    }
+
+    public bool TryGetPath(Vector3 targetPosition, NavMeshPath pathToTarget)
+    {
+        if (_agent == null)
+            return false;
+
+        return NavMeshUtils.TryGetPath(_agent, targetPosition, pathToTarget);
+    }
+
+    public void SetTargetPoint(Vector3 targetPoint)
+    {
+        _targetPoint = targetPoint;
+        _hasTarget = true;
+    }
+
+    public void ClearTarget()
+    {
+        _hasTarget = false;
+    }
+
+    public bool TryGetCurrentLink(out OffMeshLinkData linkData)
+    {
+        if (_agent != null && _agent.isOnOffMeshLink)
+        {
+            linkData = _agent.currentOffMeshLinkData;
+
+            return true;
+        }
+
+        linkData = default;
+
+        return false;
+    }
+
+    public void TraverseLink(OffMeshLinkData linkData)
+    {
+        if (_linkTraverser == null)
+            return;
+
+        _linkTraverser.Traverse(linkData);
+    }
+
+    public void TakeDamage(int damage)
+    {
+        _isDamage = true;
+
+        _health.TakeDamage(damage);
+
+        Debug.Log("Здоровье: " + _health.CurrentHealth);
+    }
+
+    public void ResetDamageFlag()
+    {
+        _isDamage = false;
+    }
+
+    public void Heal(int health)
+    {
+        if (_health.IsDead)
+            return;
+
+        _health.Heal(health);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Controllers\ClickToMoveCharacterController.cs =====
+using UnityEngine;
+using UnityEngine.AI;
+
+public class ClickToMoveCharacterController : Controller
+{
+    private readonly INavMeshMovable _movable;
+    private readonly IMovementTarget _movementTarget;
+    private readonly INavMeshLinkTraversable _linkTraversable;
+    private readonly IDirectionalRotatable _rotatable;
+
+    private readonly CameraRaycaster _cameraRaycaster;
+
+    private readonly float _navMeshSearchDistance;
+    private readonly float _stopDistance;
+
+
+    private readonly NavMeshPath _pathToTarget = new NavMeshPath();
+
+    public ClickToMoveCharacterController(
+     INavMeshMovable movable,
+     IMovementTarget movementTarget,
+     INavMeshLinkTraversable linkTraversable,
+     IDirectionalRotatable rotatable,
+     CameraRaycaster cameraRaycaster,
+     float navMeshSearchDistance,
+     float stopDistance)
+    {
+        _movable = movable;
+        _movementTarget = movementTarget;
+
+        _linkTraversable = linkTraversable;
+        _rotatable = rotatable;
+
+        _cameraRaycaster = cameraRaycaster;
+
+        _navMeshSearchDistance = navMeshSearchDistance;
+
+        _stopDistance = stopDistance;
+    }
+
+    protected override void UpdateLogic(float deltaTime)
+    {
+        if (TryTraverseLink())
+            return;
+
+        TrySetNewTarget();
+
+        UpdateMovement();
+    }
+
+    private void TrySetNewTarget()
+    {
+        if (Input.GetMouseButtonDown(0) == false)
+            return;
+
+        if (_cameraRaycaster.TryGetHitPoint(Input.mousePosition, out Vector3 hitPoint) == false)
+            return;
+
+        if (NavMesh.SamplePosition(hitPoint, out NavMeshHit navMeshHit, _navMeshSearchDistance, NavMesh.AllAreas) == false)
+            return;
+
+        Vector3 targetPoint = navMeshHit.position;
+
+        if (_movable.TryGetPath(targetPoint, _pathToTarget) == false)
+            return;
+
+        if (_pathToTarget.status != NavMeshPathStatus.PathComplete)
+            return;
+
+        _movable.ResetPath();
+
+        _movable.ResumeMove();
+        _movable.SetDestination(targetPoint);
+
+        _movementTarget.SetTargetPoint(targetPoint);
+    }
+
+    private void UpdateMovement()
+    {
+        if (_movementTarget.HasTarget == false)
+            return;
+
+        if (_movable.TryGetPath(_movementTarget.TargetPoint, _pathToTarget) == false)
+        {
+            StopMovement();
+            return;
+        }
+
+        if (_pathToTarget.status != NavMeshPathStatus.PathComplete)
+        {
+            StopMovement();
+            return;
+        }
+
+        float distanceToTarget = NavMeshUtils.GetPathLength(_pathToTarget);
+
+        if (distanceToTarget > _stopDistance)
+            return;
+
+        StopMovement();
+    }
+
+    private void StopMovement()
+    {
+        _movable.StopMove();
+
+        _movementTarget.ClearTarget();
+    }
+
+    public override void Disable()
+    {
+        base.Disable();
+
+        StopMovement();
+    }
+
+    private bool TryTraverseLink()
+    {
+        if (_linkTraversable.TryGetCurrentLink(out OffMeshLinkData linkData) == false)
+            return false;
+
+        if (_linkTraversable.IsLinkTraversalInProcess == false)
+        {
+            Vector3 direction = linkData.endPos - linkData.startPos;
+
+            direction.y = 0f;
+
+            _rotatable.SetRotationDirection(direction);
+
+            _linkTraversable.TraverseLink(linkData);
+        }
+
+        return true;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Controllers\CompositeController.cs =====
+public class CompositeController : Controller
+{
+    private readonly Controller[] _controllers;
+
+    public CompositeController(params Controller[] controllers)
+    {
+        _controllers = controllers;
+    }
+
+    public override void Enable()
+    {
+        base.Enable();
+
+        foreach (Controller controller in _controllers)
+            controller.Enable();
+    }
+
+    public override void Disable()
+    {
+        base.Disable();
+
+        foreach (Controller controller in _controllers)
+            controller.Disable();
+    }
+
+    protected override void UpdateLogic(float deltaTime)
+    {
+        foreach (Controller controller in _controllers)
+            controller.Update(deltaTime);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Controllers\Controller.cs =====
+public abstract class Controller
+{
+    private bool _isEnabled;
+
+    public virtual void Enable()
+    {
+        _isEnabled = true;
+    }
+
+    public virtual void Disable()
+    {
+        _isEnabled = false;
+    }
+
+    public void Update(float deltaTime)
+    {
+        if (_isEnabled == false)
+            return;
+
+        UpdateLogic(deltaTime);
+    }
+
+    protected abstract void UpdateLogic(float deltaTime);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Controllers\KeyboardDirectionalMoveController.cs =====
+using UnityEngine;
+
+public class KeyboardDirectionalMoveController : Controller
+{
+    private readonly IDirectionalMovable _movable;
+    private readonly CameraRelativeDirection _cameraRelativeDirection;
+
+    public KeyboardDirectionalMoveController(IDirectionalMovable movable, CameraRelativeDirection cameraRelativeDirection)
+    {
+        _movable = movable;
+        _cameraRelativeDirection = cameraRelativeDirection;
+    }
+
+    protected override void UpdateLogic(float deltaTime)
+    {
+        Vector3 inputDirection = new Vector3(Input.GetAxisRaw("Horizontal"), 0f, Input.GetAxisRaw("Vertical"));
+
+        Vector3 moveDirection = _cameraRelativeDirection.GetDirection(inputDirection);
+
+        _movable.SetMoveDirection(moveDirection);
+    }
+
+    public override void Disable()
+    {
+        base.Disable();
+
+        _movable.SetMoveDirection(Vector3.zero);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Controllers\KeyboardDirectionalRotationController.cs =====
+using UnityEngine;
+
+public class KeyboardDirectionalRotationController : Controller
+{
+    private readonly IDirectionalRotatable _rotatable;
+    private readonly CameraRelativeDirection _cameraRelativeDirection;
+
+    public KeyboardDirectionalRotationController(  IDirectionalRotatable rotatable, CameraRelativeDirection cameraRelativeDirection)
+    {
+        _rotatable = rotatable;
+        _cameraRelativeDirection = cameraRelativeDirection;
+    }
+
+    protected override void UpdateLogic(float deltaTime)
+    {
+        Vector3 inputDirection = new Vector3(   Input.GetAxisRaw("Horizontal"),  0f,  Input.GetAxisRaw("Vertical"));
+
+        Vector3 rotationDirection = _cameraRelativeDirection.GetDirection(inputDirection);
+
+        _rotatable.SetRotationDirection(rotationDirection);
+    }
+
+    public override void Disable()
+    {
+        base.Disable();
+
+        _rotatable.SetRotationDirection(Vector3.zero);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Dragon.cs =====
+using UnityEngine;
+
+public class Dragon : Enemy
+{
+    private float _accumulationFire;
+
+    public float AccumulationFire => _accumulationFire;
+    public override string GetDescription() => $"{base.GetDescription()}\nОгонь: {AccumulationFire}";
+
+    public override void Initialize(EnemySettings settings)
+    {
+        base.Initialize(settings);
+
+        if (settings is DragonSettings dragonSettings)
+            _accumulationFire = dragonSettings.AccumulationFire;
+    }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Elf.cs =====
+using UnityEngine;
+
+public class Elf : Enemy
+{
+    private float _agility;
+
+    public float Agility => _agility;
+    public override string GetDescription() => $"{base.GetDescription()}\nЛовкость: {Agility}";
+
+    public override void Initialize(EnemySettings settings)
+    {
+        base.Initialize(settings);
+
+        if (settings is ElfSettings elfSettings)
+            _agility = elfSettings.Agility;
+    }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Enemy.cs =====
+using UnityEngine;
+
+public class Enemy : MonoBehaviour
+{
+    private EnemySettings _enemySettings;
+
+    public float Damage => _enemySettings.Damage;
+    public virtual string GetDescription() => $"����: {Damage}";
+
+    public virtual void Initialize(EnemySettings settings) => _enemySettings = settings;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\EnemySpawner.cs =====
+using UnityEngine;
+
+public class EnemySpawner : MonoBehaviour
+{
+    [SerializeField] private Ork _orkPrefab;
+    [SerializeField] private Elf _elfPrefab;
+    [SerializeField] private Dragon _dragonPrefab;
+    [SerializeField] private Transform _parentTransformForEnemy;
+
+    public Enemy Spawn(EnemySettings settings, Vector3 position)
+    {
+        Enemy prefab = null;
+
+        if (settings is OrkSettings)
+            prefab = _orkPrefab;
+        else if (settings is ElfSettings)
+            prefab = _elfPrefab;
+        else if (settings is DragonSettings)
+            prefab = _dragonPrefab;
+        else
+        {
+            Debug.LogWarning("[EnemySpawner] Такого врага не существует");
+            return null;
+        }
+
+        Enemy newEnemy = Instantiate(prefab, position, Quaternion.Euler(0f, 180f, 0f), _parentTransformForEnemy);
+        newEnemy.Initialize(settings);
+
+        return newEnemy;
+    }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\EnemyUIWorldSpace.cs =====
+using TMPro;
+using UnityEngine;
+
+[RequireComponent(typeof(Enemy))]
+public class EnemyUIWorldSpace : MonoBehaviour
+{
+    [SerializeField] private TMP_Text _nameText;
+    [SerializeField] private TMP_Text _textCharacteristics;
+
+    private Enemy _enemy;
+
+    private void Start()
+    {
+        _enemy = GetComponent<Enemy>();
+
+        _nameText.text = _enemy.GetType().Name;
+        _textCharacteristics.text = _enemy.GetDescription();
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Example.cs =====
+using UnityEngine;
+
+public class Example : MonoBehaviour
+{
+    private const int EnemiesPerType = 3;
+
+    [SerializeField] private OrkSettings[] _orksEnemySettings;
+    [SerializeField] private ElfSettings[] _elfsEnemySettings;
+    [SerializeField] private DragonSettings[] _dragonsEnemySettings;
+    [SerializeField] private EnemySpawner _enemySpawner;
+    [SerializeField] private int _spacing = 2;
+
+    private int _positionX = 0;
+
+    private void Awake()
+    {
+        SpawnEnemies(_orksEnemySettings);
+        SpawnEnemies(_elfsEnemySettings);
+        SpawnEnemies(_dragonsEnemySettings);
+    }
+
+    private void SpawnEnemies(EnemySettings[] settings)
+    {
+        if (settings.Length == 0)
+        {
+            Debug.LogWarning("[Example] Массив настроек пуст");
+
+            return;
+        }
+
+        for (int i = 0; i < EnemiesPerType; i++)
+        {
+            EnemySettings randomSettings = settings[Random.Range(0, settings.Length)];
+
+            _enemySpawner.Spawn(randomSettings, new Vector3(_positionX, 0, 0));
+            _positionX += _spacing;
+        }
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemy.cs =====
+using UnityEngine;
+
+public class OldEnemy : MonoBehaviour
+{
+    [SerializeField] private Renderer _renderer;
+
+    public bool IsDead { get; private set; }
+
+    public void SetColor(Color color) => _renderer.material.color = color;
+
+    public void Die() => IsDead = true;
+
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyCountdownDisplay.cs =====
+using System.Collections;
+using TMPro;
+using UnityEngine;
+
+public class OldEnemyCountdownDisplay : MonoBehaviour
+{
+    [SerializeField] private GameObject _root;
+    [SerializeField] private TMP_Text _countdownText;
+    [SerializeField] private Color _normalColor = Color.white;
+    [SerializeField] private Color _finishedColor = Color.red;
+
+    public void StartCountdown(float duration)
+    {
+        _root.SetActive(true);
+        _countdownText.color = _normalColor;
+
+        StartCoroutine(CountdownRoutine(duration));
+    }
+
+    private IEnumerator CountdownRoutine(float duration)
+    {
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            _countdownText.text = Mathf.CeilToInt(duration - elapsed).ToString();
+
+            yield return null;
+            elapsed += Time.deltaTime;
+        }
+
+        _countdownText.text = "0";
+        _countdownText.color = _finishedColor;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyCounterView.cs =====
+using TMPro;
+using UnityEngine;
+
+public class OldEnemyCounterView : MonoBehaviour
+{
+    [SerializeField] private OldEnemyDestroyerHolder _oldEnemyDestroyerHolder;
+    [SerializeField] private TMP_Text _countTMP;
+
+    private void Start()
+    {
+        _oldEnemyDestroyerHolder.OldEnemyDestroyer.CountChanged += UpdateCount;
+
+        UpdateCount(_oldEnemyDestroyerHolder.OldEnemyDestroyer.EnemiesCount);
+    }
+
+    private void OnDestroy()
+    {
+        _oldEnemyDestroyerHolder.OldEnemyDestroyer.CountChanged -= UpdateCount;
+    }
+
+    private void UpdateCount(int count) => _countTMP.text = count.ToString();
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyDestroyer.cs =====
+using System;
+using System.Collections.Generic;
+
+public class OldEnemyDestroyer
+{
+    public event Action<OldEnemy> OldEnemyDestroyed;
+    public event Action<int> CountChanged;
+
+    private readonly List<OldEnemyWithCondition> _enemies = new List<OldEnemyWithCondition>();
+
+    public int EnemiesCount => _enemies.Count;
+
+    public void Register(OldEnemy enemy, Func<bool> condition)
+    {
+        OldEnemyWithCondition enemyWithCondition = new OldEnemyWithCondition();
+        enemyWithCondition.OldEnemy = enemy;
+        enemyWithCondition.Condition = condition;
+
+        _enemies.Add(enemyWithCondition);
+
+        CountChanged?.Invoke(EnemiesCount);
+    }
+
+    public void Update()
+    {
+        List<OldEnemyWithCondition> readyToDestroy = new List<OldEnemyWithCondition>();
+
+        foreach (OldEnemyWithCondition enemyWithCondition in _enemies)
+        {
+            if (enemyWithCondition.Condition() == false)
+                continue;
+
+            readyToDestroy.Add(enemyWithCondition);
+        }
+
+        if (readyToDestroy.Count == 0)
+            return;
+
+        foreach (OldEnemyWithCondition enemyWithCondition in readyToDestroy)
+        {
+            _enemies.Remove(enemyWithCondition);
+            OldEnemyDestroyed?.Invoke(enemyWithCondition.OldEnemy);
+        }
+
+        CountChanged?.Invoke(EnemiesCount);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyDestroyerHolder.cs =====
+using UnityEngine;
+
+public class OldEnemyDestroyerHolder : MonoBehaviour
+{
+    public OldEnemyDestroyer OldEnemyDestroyer => _oldEnemyDestroyer;
+
+    private OldEnemyDestroyer _oldEnemyDestroyer;
+
+    private void Awake()
+    {
+        _oldEnemyDestroyer = new OldEnemyDestroyer();
+        _oldEnemyDestroyer.OldEnemyDestroyed += OnOldEnemyDestroyed;
+    }
+
+    private void OnDestroy()
+    {
+        _oldEnemyDestroyer.OldEnemyDestroyed -= OnOldEnemyDestroyed;
+    }
+
+    private void Update()
+    {
+        _oldEnemyDestroyer.Update();
+    }
+
+    private void OnOldEnemyDestroyed(OldEnemy oldEnemy)
+    {
+        Destroy(oldEnemy.gameObject);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyKiller.cs =====
+using UnityEngine;
+
+public class OldEnemyKiller : MonoBehaviour
+{
+    [SerializeField] private float _killRadius = 2f;
+    [SerializeField] private KeyCode _killButton;
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(_killButton))
+            TryKillNearbyEnemies();
+    }
+
+    private void TryKillNearbyEnemies()
+    {
+        Collider[] hits = Physics.OverlapSphere(transform.position, _killRadius);
+
+        foreach (Collider hit in hits)
+        {
+            if (hit.TryGetComponent(out OldEnemy enemy))
+                enemy.Die();
+        }
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyTestSpawner.cs =====
+using UnityEngine;
+
+public class OldEnemyTestSpawner : MonoBehaviour
+{
+    [SerializeField] private OldEnemyDestroyerHolder _enemyDestroyerHolder;
+    [SerializeField] private OldEnemy _oldEnemyPrefab;
+
+    [SerializeField] private Transform _manualKillSpawnPoint;
+    [SerializeField] private Transform _timedKillSpawnPoint;
+    [SerializeField] private Transform _countKillSpawnPoint;
+    [SerializeField] private float _deathDelayAfterCountdown = 1f;
+
+    [SerializeField] private float _lifetimeThreshold = 5f;
+    [SerializeField] private int _countThreshold = 2;
+
+    [SerializeField] private Color _manualKillColor = Color.red;
+    [SerializeField] private Color _timedKillColor = Color.blue;
+    [SerializeField] private Color _countKillColor = Color.magenta;
+
+    private OldEnemy _manualKillEnemy;
+    private OldEnemy _timedKillEnemy;
+    private OldEnemy _countKillEnemy;
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Alpha7))
+            SpawnManualKillEnemy();
+
+        if (Input.GetKeyDown(KeyCode.Alpha8))
+            SpawnTimedKillEnemy();
+
+        if (Input.GetKeyDown(KeyCode.Alpha9))
+            SpawnCountKillEnemy();
+    }
+
+    private void SpawnManualKillEnemy()
+    {
+        if (_manualKillEnemy != null)
+            return;
+
+        _manualKillEnemy = Instantiate(_oldEnemyPrefab, _manualKillSpawnPoint.position, _manualKillSpawnPoint.rotation);
+        _manualKillEnemy.SetColor(_manualKillColor);
+
+        _enemyDestroyerHolder.OldEnemyDestroyer.Register(_manualKillEnemy, () => _manualKillEnemy.IsDead);
+    }
+
+    private void SpawnTimedKillEnemy()
+    {
+        if (_timedKillEnemy != null)
+            return;
+
+        _timedKillEnemy = Instantiate(_oldEnemyPrefab, _timedKillSpawnPoint.position, _timedKillSpawnPoint.rotation);
+        _timedKillEnemy.SetColor(_timedKillColor);
+
+        float spawnTime = Time.time;
+        float destroyDelay = _lifetimeThreshold + _deathDelayAfterCountdown;
+
+        _enemyDestroyerHolder.OldEnemyDestroyer.Register(_timedKillEnemy, () => Time.time - spawnTime > destroyDelay);
+
+        OldEnemyCountdownDisplay countdownDisplay = _timedKillEnemy.GetComponentInChildren<OldEnemyCountdownDisplay>(true);
+
+        if (countdownDisplay != null)
+            countdownDisplay.StartCountdown(_lifetimeThreshold);
+    }
+
+    private void SpawnCountKillEnemy()
+    {
+        if (_countKillEnemy != null)
+            return;
+
+        _countKillEnemy = Instantiate(_oldEnemyPrefab, _countKillSpawnPoint.position, _countKillSpawnPoint.rotation);
+        _countKillEnemy.SetColor(_countKillColor);
+
+        _enemyDestroyerHolder.OldEnemyDestroyer.Register(_countKillEnemy, () => _enemyDestroyerHolder.OldEnemyDestroyer.EnemiesCount > _countThreshold);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Old\OldEnemyWithCondition.cs =====
+using System;
+
+public class OldEnemyWithCondition
+{
+    public OldEnemy OldEnemy;
+    public Func<bool> Condition;
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Ork.cs =====
+public class Ork : Enemy
+{
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Settings\DragonSettings.cs =====
+using System;
+using UnityEngine;
+
+[Serializable]
+public class DragonSettings : EnemySettings
+{
+    [SerializeField] private float _accumulationFire;
+    public float AccumulationFire => _accumulationFire;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Settings\ElfSettings.cs =====
+using System;
+using UnityEngine;
+
+[Serializable]
+public class ElfSettings : EnemySettings
+{
+    [SerializeField] private float _agility;
+    public float Agility => _agility;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Settings\EnemySettings.cs =====
+using System;
+using UnityEngine;
+
+[Serializable]
+public class EnemySettings
+{
+    [SerializeField] private float _damage;
+    public float Damage => _damage;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Enemy\Settings\OrkSettings.cs =====
+using System;
+
+[Serializable]
+public class OrkSettings : EnemySettings
+{
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Health\Health.cs =====
+public class Health
+{
+    private readonly int _maxHealth;
+    private readonly float _woundedPercent;
+
+    private int _currentHealth;
+
+    public int CurrentHealth => _currentHealth;
+    public int MaxHealth => _maxHealth;
+
+    public bool IsDead => _currentHealth <= 0;
+
+    public bool IsWounded
+    {
+        get
+        {
+            float woundedHealthLimit = _maxHealth * _woundedPercent;
+            return _currentHealth <= woundedHealthLimit;
+        }
+    }
+
+    public Health(int maxHealth, float woundedPercent)
+    {
+        _maxHealth = maxHealth;
+        _woundedPercent = woundedPercent;
+        _currentHealth = maxHealth;
+    }
+
+    public void TakeDamage(int damage)
+    {
+        if (IsDead)
+            return;
+
+        _currentHealth -= damage;
+
+        if (_currentHealth < 0)
+            _currentHealth = 0;
+    }
+
+    public void Heal(int health)
+    {
+        if (IsDead)
+            return;
+
+        _currentHealth += health;
+
+        if (_currentHealth > _maxHealth)
+            _currentHealth = _maxHealth;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Health\HealthKit.cs =====
+using UnityEngine;
+
+public class HealthKit : MonoBehaviour
+{
+    [SerializeField] private int _healthRestore = 25;
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.TryGetComponent(out IHealable healable))
+        {
+            healable.Heal(_healthRestore);
+
+            Destroy(gameObject);
+        }
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Health\HealthKitSpawner.cs =====
+using System.Collections;
+using UnityEngine;
+
+public class HealthKitSpawner : MonoBehaviour
+{
+    [SerializeField] private Transform _character;
+
+    [SerializeField] private HealthKit _healthKitPrefab;
+
+    [SerializeField] private float _spawnDelay = 5f;
+    [SerializeField] private float _spawnDistance = 5f;
+
+    private Coroutine _spawnProcess;
+
+    private bool IsActive => _spawnProcess != null;
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.F))
+            ToggleSpawner();
+    }
+
+    private void ToggleSpawner()
+    {
+        if (IsActive)
+        {
+            DisableSpawner();
+            return;
+        }
+
+        EnableSpawner();
+    }
+
+    private void EnableSpawner()
+    {
+        _spawnProcess = StartCoroutine(SpawnProcess());
+    }
+
+    private void DisableSpawner()
+    {
+        StopCoroutine(_spawnProcess);
+
+        _spawnProcess = null;
+    }
+
+    private IEnumerator SpawnProcess()
+    {
+        while (true)
+        {
+            yield return new WaitForSeconds(_spawnDelay);
+
+            SpawnHealthKit();
+        }
+    }
+
+    private void SpawnHealthKit()
+    {
+        float angle = Random.Range(0f, 360f);
+
+        float angleInRadians = angle * Mathf.Deg2Rad;
+
+        Vector3 direction = new Vector3(Mathf.Cos(angleInRadians), 0f, Mathf.Sin(angleInRadians));
+
+        Vector3 spawnPosition = _character.position + direction * _spawnDistance;
+
+        Instantiate(_healthKitPrefab, spawnPosition, Quaternion.identity);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Health\IDamageable.cs =====
+public interface IDamageable
+{
+    void TakeDamage(int damage);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Health\IHealable.cs =====
+public interface IHealable
+{
+    void Heal(int health);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Input\CameraRelativeDirection.cs =====
+using UnityEngine;
+
+public class CameraRelativeDirection
+{
+    private readonly Transform _cameraTransform;
+
+    public CameraRelativeDirection(Transform cameraTransform)
+    {
+        _cameraTransform = cameraTransform;
+    }
+
+    public Vector3 GetDirection(Vector3 inputDirection)
+    {
+        Vector3 forward = _cameraTransform.forward;
+        Vector3 right = _cameraTransform.right;
+
+        forward.y = 0f;
+        right.y = 0f;
+
+        forward.Normalize();
+        right.Normalize();
+
+        return forward * inputDirection.z + right * inputDirection.x;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Input\CharacterControlType.cs =====
+public enum CharacterControlType
+{
+    Keyboard,
+    ClickToMove
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Input\CharacterInput.cs =====
+using UnityEngine;
+
+public class CharacterInput : MonoBehaviour
+{
+    [SerializeField] private CharacterControlType _controlType;
+
+    [SerializeField] private Character _character;
+
+    [SerializeField] private Camera _camera;
+
+    [SerializeField] private LayerMask _clickableLayers;
+
+    [SerializeField] private float _navMeshSearchDistance = 0.1f;
+    [SerializeField] private float _stopDistance = 0.2f;
+
+    private Controller _characterController;
+
+    private void Awake()
+    {
+        InitializeController();
+
+        _characterController.Enable();
+    }
+
+    private void Update()
+    {
+        _characterController.Update(Time.deltaTime);
+    }
+
+    private void InitializeController()
+    {
+        switch (_controlType)
+        {
+            case CharacterControlType.Keyboard:
+                {
+                    _character.InitializeDirectionalMovement();
+
+                    CameraRelativeDirection cameraRelativeDirection = new CameraRelativeDirection(_camera.transform);
+
+                    _characterController = new CompositeController(new KeyboardDirectionalMoveController(_character, cameraRelativeDirection),
+
+                            new KeyboardDirectionalRotationController(_character, cameraRelativeDirection));
+
+                    break;
+                }
+
+            case CharacterControlType.ClickToMove:
+                {
+                    _character.InitializeAgentMovement();
+
+                    CameraRaycaster cameraRaycaster =
+                        new CameraRaycaster(
+                            _camera,
+                            _clickableLayers);
+
+                    _characterController = new ClickToMoveCharacterController(
+                        _character,
+                        _character,
+                        _character,
+                        _character,
+                        cameraRaycaster,
+                        _navMeshSearchDistance,
+                        _stopDistance);
+
+                    break;
+                }
+        }
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Link\AgentLinkTraverser.cs =====
+using UnityEngine;
+using UnityEngine.AI;
+
+public class AgentLinkTraverser
+{
+    private readonly AgentJumper _jumper;
+    private readonly AgentClimber _climber;
+
+    private readonly DirectionalRotator _rotator;
+
+    public AgentLinkTraverser(AgentJumper jumper, AgentClimber climber, DirectionalRotator rotator)
+    {
+        _jumper = jumper;
+        _climber = climber;
+        _rotator = rotator;
+    }
+
+    public bool InProcess => _jumper.InProcess || _climber.InProcess;
+
+    public NavMeshLinkTraversalType CurrentTraversalType
+    {
+        get
+        {
+            if (_jumper.InProcess)
+                return NavMeshLinkTraversalType.Jump;
+
+            if (_climber.InProcess)
+                return NavMeshLinkTraversalType.Climb;
+
+            return NavMeshLinkTraversalType.None;
+        }
+    }
+
+    public void Traverse(OffMeshLinkData linkData)
+    {
+        if (InProcess)
+            return;
+
+        Component linkOwner = linkData.owner as Component;
+
+        if (linkOwner == null)
+        {
+            Debug.LogError("У NavMeshLink не найден owner.");
+
+            return;
+        }
+
+        if (linkOwner.TryGetComponent(out NavMeshTraversalLink traversalLink) == false)
+        {
+            Debug.LogError("На NavMeshLink отсутствует NavMeshTraversalLink.");
+
+            return;
+        }
+
+        switch (traversalLink.TraversalType)
+        {
+            case NavMeshLinkTraversalType.Jump:
+                TraverseJump(linkData);
+                break;
+
+            case NavMeshLinkTraversalType.Climb:
+                TraverseClimb(linkData, traversalLink);
+                break;
+        }
+    }
+
+    private void TraverseJump(OffMeshLinkData linkData)
+    {
+        Vector3 direction = linkData.endPos - linkData.startPos;
+
+        direction.y = 0f;
+
+        _rotator.SetInputDirection(direction);
+
+        _jumper.Jump(linkData);
+    }
+
+    private void TraverseClimb(OffMeshLinkData linkData, NavMeshTraversalLink traversalLink)
+    {
+        Vector3 facingDirection = traversalLink.FacingDirection;
+
+        facingDirection.y = 0f;
+
+        _rotator.SetInputDirection(facingDirection);
+
+        _climber.Climb(linkData);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Link\NavMeshLinkTraversalType.cs =====
+public enum NavMeshLinkTraversalType
+{
+    None,
+    Jump,
+    Climb
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Link\NavMeshTraversalLink.cs =====
+using UnityEngine;
+
+public class NavMeshTraversalLink : MonoBehaviour
+{
+    [SerializeField] private NavMeshLinkTraversalType _traversalType;
+
+    public NavMeshLinkTraversalType TraversalType => _traversalType;
+
+    public Vector3 FacingDirection => -transform.right;
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Mine\Mine.cs =====
+using System.Collections;
+using UnityEngine;
+
+public class Mine : MonoBehaviour
+{
+    [SerializeField] private float _activationRadius = 2f;
+    [SerializeField] private float _explosionRadius = 3f;
+    [SerializeField] private float _explosionDelay = 1f;
+    [SerializeField] private int _damage = 40;
+
+    private bool _isActivated;
+
+    public bool IsExploded { get; private set; }
+
+    private void Update()
+    {
+        if (_isActivated)
+            return;
+
+        TryActivate();
+    }
+
+    private void TryActivate()
+    {
+        Collider[] hits = Physics.OverlapSphere(transform.position, _activationRadius);
+
+        foreach (Collider hit in hits)
+        {
+            if (hit.TryGetComponent(out IDamageable damageable))
+            {
+                Activate();
+                return;
+            }
+        }
+    }
+
+    private void Activate()
+    {
+        _isActivated = true;
+
+        StartCoroutine(ExplosionDelay());
+    }
+
+    private IEnumerator ExplosionDelay()
+    {
+        yield return new WaitForSeconds(_explosionDelay);
+
+        Explode();
+    }
+
+    private void Explode()
+    {
+        IsExploded = true;
+
+        Collider[] hits = Physics.OverlapSphere(transform.position, _explosionRadius);
+
+        foreach (Collider hit in hits)
+        {
+            if (hit.TryGetComponent(out IDamageable damageable))
+                damageable.TakeDamage(_damage);
+        }
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.yellow;
+
+        Gizmos.DrawWireSphere(transform.position, _activationRadius);
+
+        Gizmos.color = Color.red;
+
+        Gizmos.DrawWireSphere(transform.position, _explosionRadius);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Mine\MineSoundView.cs =====
+using System.Collections;
+using UnityEngine;
+
+public class MineSoundView : MonoBehaviour
+{
+    [SerializeField] private Mine _mine;
+    [SerializeField] private AudioSource _audioSource;
+
+    private bool _isExplosionSoundPlayed;
+
+    private void Update()
+    {
+        if (_mine.IsExploded == false)
+            return;
+
+        if (_isExplosionSoundPlayed)
+            return;
+
+        StartCoroutine(PlayExplosionSound());
+    }
+
+    private IEnumerator PlayExplosionSound()
+    {
+        _isExplosionSoundPlayed = true;
+
+        _audioSource.Play();
+
+        yield return new WaitWhile(() => _audioSource.isPlaying);
+
+        Destroy(_mine.gameObject);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Mine\MineView.cs =====
+using UnityEngine;
+
+public class MineView : MonoBehaviour
+{
+    [SerializeField] private Mine _mine;
+
+    [SerializeField] private GameObject _visual;
+
+    [SerializeField] private GameObject _explosionParticlePrefab;
+    [SerializeField] private float _particleDestroyDelay = 3f;
+
+    private bool _isExplosionShown;
+
+    private void Update()
+    {
+        if (_mine.IsExploded == false)
+            return;
+
+        if (_isExplosionShown)
+            return;
+
+        ShowExplosion();
+    }
+
+    private void ShowExplosion()
+    {
+        _isExplosionShown = true;
+
+        SpawnExplosionParticle();
+
+        Destroy(_visual);
+    }
+
+    private void SpawnExplosionParticle()
+    {
+        if (_explosionParticlePrefab == null)
+            return;
+
+        GameObject explosionParticle = Instantiate(_explosionParticlePrefab, transform.position, Quaternion.identity);
+
+        Destroy(explosionParticle, _particleDestroyDelay);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\AgentClimber.cs =====
+using System.Collections;
+using UnityEngine;
+using UnityEngine.AI;
+
+public class AgentClimber
+{
+    private readonly NavMeshAgent _agent;
+    private readonly MonoBehaviour _coroutineRunner;
+
+    private readonly float _speed;
+
+    private Coroutine _climbProcess;
+
+    public bool InProcess => _climbProcess != null;
+
+    public AgentClimber(NavMeshAgent agent, MonoBehaviour coroutineRunner, float speed)
+    {
+        _agent = agent;
+        _coroutineRunner = coroutineRunner;
+
+        _speed = speed;
+    }
+
+    public void Climb(OffMeshLinkData linkData)
+    {
+        if (InProcess)
+            return;
+
+        _climbProcess = _coroutineRunner.StartCoroutine(ClimbProcess(linkData));
+    }
+
+    private IEnumerator ClimbProcess(OffMeshLinkData linkData)
+    {
+        Vector3 startPosition = linkData.startPos + Vector3.up * _agent.baseOffset;
+
+        Vector3 endPosition = linkData.endPos + Vector3.up * _agent.baseOffset;
+
+        float distance = Vector3.Distance(startPosition, endPosition);
+
+        float duration = distance / _speed;
+
+        float elapsedTime = 0f;
+
+        while (elapsedTime < duration)
+        {
+            float progress = elapsedTime / duration;
+
+            _agent.transform.position = Vector3.Lerp(startPosition, endPosition, progress);
+
+            elapsedTime += Time.deltaTime;
+
+            yield return null;
+        }
+
+        _agent.transform.position = endPosition;
+
+        _agent.CompleteOffMeshLink();
+
+        _climbProcess = null;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\AgentJumper.cs =====
+using System.Collections;
+using UnityEngine;
+using UnityEngine.AI;
+
+public class AgentJumper
+{
+    private readonly NavMeshAgent _agent;
+    private readonly MonoBehaviour _coroutineRunner;
+
+    private readonly float _speed;
+    private readonly AnimationCurve _heightCurve;
+
+    private Coroutine _jumpProcess;
+
+    public bool InProcess => _jumpProcess != null;
+
+    public AgentJumper(
+        NavMeshAgent agent,
+        MonoBehaviour coroutineRunner,
+        float speed,
+        AnimationCurve heightCurve)
+    {
+        _agent = agent;
+        _coroutineRunner = coroutineRunner;
+        _speed = speed;
+        _heightCurve = heightCurve;
+    }
+
+    public void Jump(OffMeshLinkData linkData)
+    {
+        if (InProcess)
+            return;
+
+        _jumpProcess =
+            _coroutineRunner.StartCoroutine(
+                JumpProcess(linkData));
+    }
+
+    private IEnumerator JumpProcess(
+        OffMeshLinkData linkData)
+    {
+        Vector3 startPosition =
+            linkData.startPos +
+            Vector3.up * _agent.baseOffset;
+
+        Vector3 endPosition =
+            linkData.endPos +
+            Vector3.up * _agent.baseOffset;
+
+        float distance =
+            Vector3.Distance(
+                startPosition,
+                endPosition);
+
+        float duration = distance / _speed;
+
+        float elapsedTime = 0f;
+
+        while (elapsedTime < duration)
+        {
+            float progress =
+                elapsedTime / duration;
+
+            Vector3 position =
+                Vector3.Lerp(
+                    startPosition,
+                    endPosition,
+                    progress);
+
+            float yOffset =
+                _heightCurve.Evaluate(progress);
+
+            position.y += yOffset;
+
+            _agent.transform.position = position;
+
+            elapsedTime += Time.deltaTime;
+
+            yield return null;
+        }
+
+        _agent.transform.position =
+            endPosition;
+
+        _agent.CompleteOffMeshLink();
+
+        _jumpProcess = null;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\AgentMover.cs =====
+using UnityEngine;
+using UnityEngine.AI;
+
+public class AgentMover
+{
+    private readonly NavMeshAgent _agent;
+
+    public Vector3 CurrentVelocity => _agent.desiredVelocity;
+
+    public AgentMover(NavMeshAgent agent, float movementSpeed)
+    {
+        _agent = agent;
+        _agent.speed = movementSpeed;
+    }
+
+    public void SetDestination(Vector3 position)
+    {
+        _agent.SetDestination(position);
+    }
+
+    public void Stop()
+    {
+        _agent.isStopped = true;
+    }
+
+    public void Resume()
+    {
+        _agent.isStopped = false;
+    }
+
+    public void ResetPath()
+    {
+        _agent.ResetPath();
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\CharacterControllerDirectionalMover.cs =====
+using UnityEngine;
+
+public class CharacterControllerDirectionalMover : DirectionalMover
+{
+    private const float _gravityForce = -9.81f;
+
+    private readonly CharacterController _characterController;
+
+    public CharacterControllerDirectionalMover(
+        CharacterController characterController,
+        float movementSpeed)
+        : base(movementSpeed)
+    {
+        _characterController = characterController;
+    }
+
+    public override void Update(float deltaTime)
+    {
+        Vector3 velocity = CurrentVelocity;
+        velocity.y = _gravityForce;
+
+        _characterController.Move(
+            velocity * deltaTime);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\DirectionalMover.cs =====
+using UnityEngine;
+
+public abstract class DirectionalMover
+{
+    private readonly float _movementSpeed;
+
+    private Vector3 _currentDirection;
+
+    public Vector3 CurrentVelocity => _currentDirection.normalized * _movementSpeed;
+
+    public DirectionalMover(float movementSpeed)
+    {
+        _movementSpeed = movementSpeed;
+    }
+
+    public void SetInputDirection(Vector3 direction)
+    {
+        _currentDirection = direction;
+    }
+
+    public abstract void Update(float deltaTime);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\DirectionalRotator.cs =====
+using UnityEngine;
+
+public abstract class DirectionalRotator
+{
+    private readonly float _rotationSpeed;
+
+    private Vector3 _currentDirection;
+
+    public abstract Quaternion CurrentRotation { get; }
+
+    public DirectionalRotator(float rotationSpeed)
+    {
+        _rotationSpeed = rotationSpeed;
+    }
+
+    public void SetInputDirection(Vector3 direction)
+    {
+        _currentDirection = direction;
+    }
+
+    public void Update(float deltaTime)
+    {
+        if (_currentDirection.magnitude < 0.05f)
+            return;
+
+        Quaternion lookRotation = Quaternion.LookRotation(_currentDirection.normalized);
+
+        float step = _rotationSpeed * deltaTime;
+
+        Quaternion rotation = Quaternion.RotateTowards(CurrentRotation, lookRotation, step);
+
+        ApplyRotation(rotation);
+    }
+
+    protected abstract void ApplyRotation(Quaternion rotation);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\IDirectionalMovable.cs =====
+using UnityEngine;
+
+public interface IDirectionalMovable : ITransformPosition   
+{
+    Vector3 CurrentVelocity { get; }
+
+    void SetMoveDirection(Vector3 direction);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\IDirectionalRotatable.cs =====
+using UnityEngine;
+
+public interface IDirectionalRotatable : ITransformPosition
+{
+    Quaternion CurrentRotation { get; }
+
+    void SetRotationDirection(Vector3 direction);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\IMovementTarget.cs =====
+using UnityEngine;
+
+public interface IMovementTarget
+{
+    Vector3 TargetPoint { get; }
+    bool HasTarget { get; }
+
+    void SetTargetPoint(Vector3 targetPoint);
+    void ClearTarget();
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\INavMeshLinkTraversable.cs =====
+using UnityEngine.AI;
+
+public interface INavMeshLinkTraversable
+{
+    bool IsLinkTraversalInProcess { get; }
+
+    bool TryGetCurrentLink(out OffMeshLinkData linkData);
+
+    void TraverseLink(OffMeshLinkData linkData);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\INavMeshMovable.cs =====
+using UnityEngine;
+using UnityEngine.AI;
+
+public interface INavMeshMovable : ITransformPosition
+{
+    Vector3 CurrentVelocity { get; }
+
+    void SetDestination(Vector3 position);
+
+    void StopMove();
+
+    void ResumeMove();
+
+    void ResetPath();
+
+    bool TryGetPath(Vector3 targetPosition, NavMeshPath pathToTarget);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\ITransformPosition.cs =====
+using UnityEngine;
+
+public interface ITransformPosition
+{
+    Vector3 Position { get; }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\RigidbodyDirectionalMover.cs =====
+using UnityEngine;
+
+public class RigidbodyDirectionalMover : DirectionalMover
+{
+    private readonly Rigidbody _rigidbody;
+
+    public RigidbodyDirectionalMover(Rigidbody rigidbody, float movementSpeed) : base(movementSpeed)
+    {
+        _rigidbody = rigidbody;
+    }
+
+    public override void Update(float deltaTime)
+    {
+        Vector3 velocity = CurrentVelocity;
+
+        velocity.y = _rigidbody.linearVelocity.y;
+
+        _rigidbody.linearVelocity = velocity;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\RigidbodyDirectionalRotator.cs =====
+using UnityEngine;
+
+public class RigidbodyDirectionalRotator : DirectionalRotator
+{
+    private readonly Rigidbody _rigidbody;
+
+    public override Quaternion CurrentRotation => _rigidbody.rotation;
+
+    public RigidbodyDirectionalRotator(Rigidbody rigidbody, float rotationSpeed) : base(rotationSpeed)
+    {
+        _rigidbody = rigidbody;
+    }
+
+    protected override void ApplyRotation(Quaternion rotation)
+    {
+        _rigidbody.MoveRotation(rotation);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Movement\TransformDirectionalRotator.cs =====
+using UnityEngine;
+
+public class TransformDirectionalRotator : DirectionalRotator
+{
+    private readonly Transform _transform;
+
+    public override Quaternion CurrentRotation => _transform.rotation;
+
+    public TransformDirectionalRotator(Transform transform, float rotationSpeed) : base(rotationSpeed)
+    {
+        _transform = transform;
+    }
+
+    protected override void ApplyRotation(Quaternion rotation)
+    {
+        _transform.rotation = rotation;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Ray\CameraRaycaster.cs =====
+using UnityEngine;
+
+public class CameraRaycaster
+{
+    private readonly Camera _camera;
+    private readonly LayerMask _clickableLayers;
+
+    public CameraRaycaster(Camera camera, LayerMask clickableLayers)
+    {
+        _camera = camera;
+        _clickableLayers = clickableLayers;
+    }
+
+    public bool TryGetHitPoint(Vector3 screenPosition, out Vector3 hitPoint)
+    {
+        hitPoint = Vector3.zero;
+
+        if (_camera == null)
+            return false;
+
+        Ray ray = _camera.ScreenPointToRay(screenPosition);
+
+        if (Physics.Raycast(ray, out RaycastHit hit, Mathf.Infinity, _clickableLayers))
+        {
+            hitPoint = hit.point;
+            return true;
+        }
+
+        return false;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\ReactiveProgramming\IReadOnlyVariable.cs =====
+using System;
+
+public interface IReadOnlyVariable<T>
+{
+    event Action<T, T> Changed;
+    T Value { get; }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\ReactiveProgramming\ReactiveVariable.cs =====
+using System;
+
+public class ReactiveVariable<T> : IReadOnlyVariable<T> where T : IEquatable<T>
+{
+    public event Action<T, T> Changed;
+
+    private T _value;
+
+    public T Value
+    {
+        get
+        {
+            return _value;
+        }
+        set
+        {
+            T oldValue = _value;
+            _value = value;
+
+            if (_value.Equals(oldValue) == false)
+                Changed?.Invoke(oldValue, value);
+        }
+    }
+
+    public ReactiveVariable() => _value = default(T);
+
+    public ReactiveVariable(T value) => _value = value;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Refactoring\Inventory.cs =====
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+
+public class Inventory
+{
+    private readonly List<Item> _items = new List<Item>();
+    private readonly int _maxSize;
+
+    public Inventory(int maxSize)
+    {
+        if (maxSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxSize), "Вместимость должна быть больше нуля");
+
+        _maxSize = maxSize;
+    }
+
+    public int MaxSize => _maxSize;
+
+    public int CurrentSize => _items.Sum(item => item.Count);
+
+    public IReadOnlyList<Item> Items => _items;
+
+    public bool CanAdd(Item item)
+    {
+        if (item == null)
+            throw new ArgumentNullException(nameof(item));
+
+        return CurrentSize + item.Count <= _maxSize;
+    }
+
+    public bool HasItem(string name, int count)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Имя предмета не может быть пустым", nameof(name));
+
+        if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count), "Количество должно быть больше нуля");
+
+        Item foundItem = _items.FirstOrDefault(item => item.Name == name);
+
+        return foundItem != null && foundItem.Count >= count;
+    }
+
+    public bool TryAdd(Item item)
+    {
+        if (CanAdd(item) == false)
+        {
+            Debug.LogError($"[Inventory] Не хватает места для {item.Name}");
+
+            return false;
+        }
+
+        Item existingItem = _items.FirstOrDefault(storedItem => storedItem.Name == item.Name);
+
+        if (existingItem == null)
+            _items.Add(item);
+        else
+            existingItem.Add(item.Count);
+
+        return true;
+    }
+
+    public bool TryGetItems(string name, int count, out Item takenItem)
+    {
+        takenItem = null;
+
+        if (HasItem(name, count) == false)
+        {
+            Debug.LogError($"[Inventory] Нет {count} шт. предмета {name}");
+
+            return false;
+        }
+
+        Item foundItem = _items.First(item => item.Name == name);
+
+        foundItem.Remove(count);
+
+        if (foundItem.Count == 0)
+            _items.Remove(foundItem);
+
+        takenItem = new Item(name, count);
+
+        return true;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Refactoring\Item.cs =====
+using System;
+
+public class Item
+{
+    private readonly string _name;
+    private int _count;
+
+    public Item(string name, int count)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Имя предмета не может быть пустым", nameof(name));
+
+        if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count), "Количество должно быть больше нуля");
+
+        _name = name;
+        _count = count;
+    }
+
+    public string Name => _name;
+
+    public int Count => _count;
+
+    public void Add(int count)
+    {
+        if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count), "Количество должно быть больше нуля");
+
+        _count += count;
+    }
+
+    public void Remove(int count)
+    {
+        if (count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(count), "Количество должно быть больше нуля");
+
+        if (count > _count)
+            throw new InvalidOperationException("Нельзя забрать больше, чем есть");
+
+        _count -= count;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\TargetMarker\TargetMarker.cs =====
+using UnityEngine;
+
+public class TargetMarker : MonoBehaviour
+{
+    [SerializeField] private GameObject _markerPrefab;
+
+    private GameObject _currentMarker;
+
+    public void Show(Vector3 position)
+    {
+        if (_currentMarker == null)
+            _currentMarker = Instantiate(_markerPrefab, position, Quaternion.identity, transform);
+        else
+            _currentMarker.transform.position = position;
+
+        _currentMarker.SetActive(true);
+    }
+
+    public void Hide()
+    {
+        if (_currentMarker != null)
+            _currentMarker.SetActive(false);
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\TargetMarker\TargetMarkerView.cs =====
+using UnityEngine;
+
+public class TargetMarkerView : MonoBehaviour
+{
+    [SerializeField] private Character _character;
+    [SerializeField] private TargetMarker _targetMarker;
+
+    private void Update()
+    {
+        if (_character.HasTarget)
+        {
+            _targetMarker.Show(_character.TargetPoint);
+            return;
+        }
+
+        _targetMarker.Hide();
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Timer\Timer.cs =====
+using System;
+
+public class Timer
+{
+    public event Action Finished;
+
+    private readonly ReactiveVariable<float> _time;
+
+    private readonly ReactiveVariable<bool> _isRunning;
+    private readonly ReactiveVariable<float> _progress;
+    private readonly float _delay;
+
+    public IReadOnlyVariable<float> CurrentTime => _time;
+    public IReadOnlyVariable<bool> IsRunning => _isRunning;
+
+    public IReadOnlyVariable<float> CurrentProgress => _progress;
+    public float CurrentDelay => _delay;
+
+    public Timer(float delay)
+    {
+        _time = new ReactiveVariable<float>();
+        _progress = new ReactiveVariable<float>();
+        _isRunning = new ReactiveVariable<bool>();
+
+        if (delay <= 0)
+        {
+            UnityEngine.Debug.LogError("[Timer] Максимальное время таймера не может быть 0 или отрицательным. Выставлено значение = 1");
+            _delay = 1;
+        }
+        else
+        {
+            _delay = delay;
+        }
+    }
+
+    public void Resume() => _isRunning.Value = true;
+    public void Pause() => _isRunning.Value = false;
+
+    public void Reseter()
+    {
+        _isRunning.Value = false;
+        _time.Value = 0;
+        UpdateProgress();
+    }
+
+    public void Update(float deltaTime)
+    {
+        if (_isRunning.Value == false)
+            return;
+
+        _time.Value += deltaTime;
+        UpdateProgress();
+
+        if (_time.Value >= _delay)
+        {
+            Finished?.Invoke();
+            Reseter();
+        }
+    }
+
+    private void UpdateProgress() => _progress.Value = _time.Value / _delay;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Timer\TimerExample.cs =====
+using UnityEngine;
+
+public class TimerExample : MonoBehaviour
+{
+    [SerializeField] TimerView _timerSimpleView;
+    [SerializeField] TimerView _timerSliderView;
+    [SerializeField] TimerView _timerHeartsView;
+    [SerializeField] private KeyCode _resumeButton;
+    [SerializeField] private KeyCode _pauseButton;
+    [SerializeField] private KeyCode _resetButton;
+    [SerializeField, Min(1)] private float _delay;
+
+    private Timer _timer;
+
+    private void Awake()
+    {
+        _timer = new Timer(_delay);
+        _timerSimpleView.Initialize(_timer.CurrentTime);
+        _timerSliderView.Initialize(_timer.CurrentProgress);
+        _timerHeartsView.Initialize(_timer.CurrentTime);
+    }
+
+    private void Update()
+    {
+        _timer.Update(Time.deltaTime);
+
+        if (Input.GetKeyDown(_resumeButton))
+            _timer.Resume();
+        if (Input.GetKeyDown(_pauseButton))
+            _timer.Pause();
+        if (Input.GetKeyDown(_resetButton))
+            _timer.Reseter();
+    }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Timer\TimerHeartsView.cs =====
+using System.Collections.Generic;
+using UnityEngine;
+
+public class TimerHeartsView : TimerView
+{
+    [SerializeField] private GameObject _heartPrefab;
+    [SerializeField] private Transform _parentTransform;
+
+    private List<GameObject> _hearts = new List<GameObject>();
+
+    protected override void Show(float value)
+    {
+        int currentWholeSeconds = (int)value;
+
+        if (currentWholeSeconds < _hearts.Count)
+        {
+            foreach (GameObject heart in _hearts)
+                Destroy(heart);
+
+            _hearts.Clear();
+        }
+
+        while (_hearts.Count < currentWholeSeconds)
+            _hearts.Add(Instantiate(_heartPrefab, _parentTransform));
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Timer\TimerSimpleView.cs =====
+using TMPro;
+using UnityEngine;
+
+public class TimerSimpleView : TimerView
+{
+    [SerializeField] private TMP_Text _countTimerTMP;
+
+    protected override void Show(float value) => _countTimerTMP.text = ((int)value).ToString();
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Timer\TimerSliderView.cs =====
+using UnityEngine;
+using UnityEngine.UI;
+
+public class TimerSliderView : TimerView
+{
+    [SerializeField] private Slider _slider;
+
+    protected override void Show(float value) => _slider.value = value;
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Timer\TimerView.cs =====
+using UnityEngine;
+
+public abstract class TimerView : MonoBehaviour
+{
+    private IReadOnlyVariable<float> _time;
+
+    public void Initialize(IReadOnlyVariable<float> time)
+    {
+        _time = time;
+        _time.Changed += OnTimeChanged;
+
+        Show(_time.Value);
+    }
+
+    private void OnDestroy()
+    {
+        if (_time == null)
+            return;
+
+        _time.Changed -= OnTimeChanged;
+    }
+
+    private void OnTimeChanged(float oldValue, float newValue) => Show(newValue);
+
+    protected abstract void Show(float value);
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Utils\NavMeshUtils.cs =====
+using UnityEngine;
+using UnityEngine.AI;
+
+public class NavMeshUtils
+{
+    public static float GetPathLength(NavMeshPath path)
+    {
+        float pathLength = 0f;
+
+        if (path.corners.Length > 1)
+        {
+            for (int i = 1; i < path.corners.Length; i++)
+            {
+                pathLength += Vector3.Distance(path.corners[i - 1], path.corners[i]);
+            }
+        }
+
+        return pathLength;
+    }
+
+    public static bool TryGetPath(NavMeshAgent agent, Vector3 targetPosition, NavMeshPath pathToTarget)
+    {
+        if (agent.CalculatePath(targetPosition, pathToTarget) && pathToTarget.status != NavMeshPathStatus.PathInvalid)
+            return true;
+
+        return false;
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\View\CharacterView.cs =====
+using UnityEngine;
+
+public class CharacterView : MonoBehaviour
+{
+    private readonly int IsRunningKey = Animator.StringToHash("isRunning");
+
+    private readonly int IsJumpingKey = Animator.StringToHash("isJumping");
+
+    private readonly int IsClimbingKey = Animator.StringToHash("isClimbing");
+
+    private readonly int IsDeadTriggerKey = Animator.StringToHash("isDeadTrigger");
+
+    private readonly int IsDamageTriggerKey = Animator.StringToHash("isDamageTrigger");
+
+    [SerializeField] private Animator _animator;
+    [SerializeField] private Character _character;
+
+    private bool _isDeadAnimationActive;
+
+    private void Update()
+    {
+        if (_character.IsDead)
+        {
+            if (_isDeadAnimationActive == false)
+                StartDead();
+
+            return;
+        }
+
+        UpdateWoundedState();
+
+        if (_character.IsDamage)
+            StartDamage();
+
+        UpdateMovementAnimation();
+    }
+
+    private void UpdateMovementAnimation()
+    {
+        NavMeshLinkTraversalType traversalType = _character.CurrentLinkTraversalType;
+
+        if (traversalType == NavMeshLinkTraversalType.Jump)
+        {
+            StartJumping();
+            return;
+        }
+
+        if (traversalType == NavMeshLinkTraversalType.Climb)
+        {
+            StartClimbing();
+            return;
+        }
+
+        StopJumping();
+        StopClimbing();
+
+        if (_character.CurrentVelocity.magnitude > 0.05f)
+            StartRunning();
+        else
+            StopRunning();
+    }
+
+    private void UpdateWoundedState()
+    {
+        if (_character.IsWounded)
+            _animator.SetLayerWeight(1, 1f);
+        else
+            _animator.SetLayerWeight(1, 0f);
+    }
+
+    private void StartRunning()
+    {
+        _animator.SetBool(IsRunningKey, true);
+    }
+
+    private void StopRunning()
+    {
+        _animator.SetBool(IsRunningKey, false);
+    }
+
+    private void StartJumping()
+    {
+        StopRunning();
+        StopClimbing();
+
+        _animator.SetBool(IsJumpingKey, true);
+    }
+
+    private void StopJumping()
+    {
+        _animator.SetBool(IsJumpingKey, false);
+    }
+
+    private void StartClimbing()
+    {
+        StopRunning();
+        StopJumping();
+
+        _animator.SetBool(IsClimbingKey, true);
+    }
+
+    private void StopClimbing()
+    {
+        _animator.SetBool(IsClimbingKey, false);
+    }
+
+    private void StartDead()
+    {
+        _isDeadAnimationActive = true;
+
+        _animator.SetTrigger(IsDeadTriggerKey);
+    }
+
+    private void StartDamage()
+    {
+        _animator.SetTrigger(IsDamageTriggerKey);
+
+        _character.ResetDamageFlag();
+    }
+}
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Wallet\CurrencyPanel.cs =====
+using TMPro;
+using UnityEngine;
+
+public class CurrencyPanel : MonoBehaviour
+{
+    [SerializeField] private TMP_Text _countTMP;
+    [SerializeField] private CurrencyType _currencyType;
+
+    private IReadOnlyVariable<int> _currencyAmount;
+
+    public CurrencyType CurrencyType => _currencyType;
+
+    private void OnDestroy()
+    {
+        if (_currencyAmount == null)
+            return;
+
+        _currencyAmount.Changed -= UpdateAmount;
+    }
+
+    public void Initialize(IReadOnlyVariable<int> currencyAmount)
+    {
+        _currencyAmount = currencyAmount;
+        _currencyAmount.Changed += UpdateAmount;
+        ShowAmount(_currencyAmount.Value);
+    }
+
+    private void UpdateAmount(int oldValue, int newValue) => ShowAmount(newValue);
+
+    private void ShowAmount(int value) => _countTMP.text = value.ToString();
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Wallet\CurrencyType.cs =====
+public enum CurrencyType
+{
+    Coin,
+    Diamond,
+    Ruby
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Wallet\Wallet.cs =====
+using System;
+using System.Collections.Generic;
+
+public class Wallet
+{
+    private readonly Dictionary<CurrencyType, ReactiveVariable<int>> _currencies = new Dictionary<CurrencyType, ReactiveVariable<int>>();
+
+    public Wallet()
+    {
+        foreach (CurrencyType currencyType in Enum.GetValues(typeof(CurrencyType)))
+            _currencies.Add(currencyType, new ReactiveVariable<int>());
+    }
+
+    public IReadOnlyVariable<int> GetCurrency(CurrencyType currencyType) => _currencies[currencyType];
+
+    public void Add(CurrencyType currencyType, int amount) => _currencies[currencyType].Value += amount;
+
+    public void Subtract(CurrencyType currencyType, int amount)
+    {
+        if (_currencies[currencyType].Value < amount)
+            return;
+
+        _currencies[currencyType].Value -= amount;
+    }
+}
+
+
+===== W:\MasterProjectUnity\Module 27-28\Assets\_Project\Scripts\Wallet\WalletExample.cs =====
+using System.Collections.Generic;
+using UnityEngine;
+
+public class WalletExample : MonoBehaviour
+{
+    [SerializeField] private List<CurrencyPanel> _currenciesPanelPrefabs;
+
+    [SerializeField] private Transform _parentForСurrencies;
+
+    [SerializeField] private int _testAmount = 5;
+
+    private Wallet _wallet;
+
+    private void Awake()
+    {
+        _wallet = new Wallet();
+
+        foreach (CurrencyPanel panel in _currenciesPanelPrefabs)
+        {
+            CurrencyPanel newPanel = Instantiate(panel, _parentForСurrencies);
+            newPanel.Initialize(_wallet.GetCurrency(panel.CurrencyType));
+        }
+    }
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Alpha1))
+            AddCurrency(CurrencyType.Coin, _testAmount);
+        if (Input.GetKeyDown(KeyCode.Alpha2))
+            AddCurrency(CurrencyType.Diamond, _testAmount);
+        if (Input.GetKeyDown(KeyCode.Alpha3))
+            AddCurrency(CurrencyType.Ruby, _testAmount);
+
+        if (Input.GetKeyDown(KeyCode.Alpha4))
+            SubtractCurrency(CurrencyType.Coin, _testAmount);
+        if (Input.GetKeyDown(KeyCode.Alpha5))
+            SubtractCurrency(CurrencyType.Diamond, _testAmount);
+        if (Input.GetKeyDown(KeyCode.Alpha6))
+            SubtractCurrency(CurrencyType.Ruby, _testAmount);
+    }
+
+    private void AddCurrency(CurrencyType currencyType, int amount) => _wallet.Add(currencyType, amount);
+
+    private void SubtractCurrency(CurrencyType currencyType, int amount) => _wallet.Subtract(currencyType, amount);
+}
+
+
